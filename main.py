@@ -1,36 +1,20 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import FastAPI, Path, Query
-from pydantic import AfterValidator
+from fastapi import FastAPI, Query
+from pydantic import BaseModel, Field
 
 app = FastAPI()
 
 
-def check_item_id(item_id: int) -> int:
-    if item_id > 1000:
-        raise ValueError("Item ID must be less than 1000")
-    return item_id
+class FilterParams(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    limit: Annotated[int, Field(100, gt=0, le=100)]
+    offset: Annotated[int, Field(0, ge=0)]
+    order_by: Literal["created_at", "updated_at"] = "created_at"
+    tags: list[str] = []
 
 
-@app.get("/items2/{item_id}")
-async def read_items2(
-    item_id: Annotated[int, AfterValidator(check_item_id)],
-    q: str | None = None,
-    size: Annotated[float, Query(gt=0, lt=1.0)] = 0.5,
-):
-    results = {"item_id": item_id, "size": size}
-    if q:
-        results.update({"q": q})
-    return results
-
-
-@app.get("/items/{item_id}")
-async def read_items(
-    item_id: Annotated[int, Path(title="The ID of the item to get", gt=0, le=1000)],
-    q: str | None = None,
-    size: Annotated[float, Query(gt=0, lt=1.0)] = 0.5,
-):
-    results = {"item_id": item_id, "size": size}
-    if q:
-        results.update({"q": q})
-    return results
+@app.get("/items")
+async def read_items(filter_query: Annotated[FilterParams, Query()]):
+    return filter_query
