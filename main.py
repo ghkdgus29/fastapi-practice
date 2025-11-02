@@ -1,68 +1,8 @@
-from typing import Union
-from fastapi import FastAPI
-from pydantic import BaseModel, EmailStr
+from fastapi import FastAPI, status
 
 app = FastAPI()
 
 
-class UserBase(BaseModel):
-    username: str
-    email: EmailStr
-    full_name: str | None = None
-
-
-class UserIn(UserBase):
-    password: str
-
-
-class UserOut(UserBase):
-    pass
-
-
-class UserInDB(UserBase):
-    hashed_password: str
-
-
-def fake_password_hasher(raw_password: str):
-    return "supersecret" + raw_password
-
-
-def fake_save_user(user_in: UserIn):
-    hashed_password = fake_password_hasher(user_in.password)
-    user_in_db = UserInDB(**user_in.model_dump(), hashed_password=hashed_password)
-    print("User saved! ..not really")
-    return user_in_db
-
-
-@app.post("/user/", response_model=UserOut)
-async def create_user(user_in: UserIn) -> UserOut:
-    user_saved = fake_save_user(user_in)
-    return user_saved
-
-
-class BaseItem(BaseModel):
-    description: str
-    type: str
-
-
-class CarItem(BaseItem):
-    type: str = "car"
-
-
-class PlaneItem(BaseItem):
-    type: str = "plane"
-
-
-items = {
-    "item1": {"description": "All my friends drive a low rider", "type": "car"},
-    "item2": {
-        "description": "Music is my aeroplane, it's my aeroplane",
-        "type": "plane",
-        "size": 5,
-    },
-}
-
-
-@app.get("/items/{item_id}", response_model=Union[PlaneItem, CarItem])
-async def read_item(item_id: str):
-    return items[item_id]
+@app.post("/items/", status_code=status.HTTP_201_CREATED)
+async def create_item(name: str) -> dict:
+    return {"name": name, "message": "Item created successfully"}
