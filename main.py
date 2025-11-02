@@ -1,28 +1,18 @@
-from datetime import datetime, timedelta, time
 from typing import Annotated
-from uuid import UUID
 
-from fastapi import Body, FastAPI
+from fastapi import FastAPI, Header
 
 app = FastAPI()
 
 
-@app.put("/items/{item_id}")
+@app.get("/items/")
 async def read_items(
-    item_id: UUID,
-    start_datetime: Annotated[datetime, Body()],
-    end_datetime: Annotated[datetime, Body()],
-    process_after: Annotated[timedelta, Body()],
-    repeat_at: Annotated[time | None, Body()] = None,
+    user_agent: Annotated[str | None, Header()] = None,
+    strange_header: Annotated[str | None, Header(convert_underscores=False)] = None,
+    x_token: Annotated[list[str] | None, Header()] = None,
 ):
-    start_process = start_datetime + process_after
-    duration = end_datetime - start_process
     return {
-        "item_id": item_id,
-        "start_datetime": start_datetime,
-        "end_datetime": end_datetime,
-        "process_after": process_after,
-        "repeat_at": repeat_at,
-        "start_process": start_process,
-        "duration": duration,
+        "User-Agent": user_agent,
+        "strange_header": strange_header,
+        "x_token": x_token,
     }
