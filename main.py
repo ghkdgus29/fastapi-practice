@@ -1,18 +1,18 @@
 from typing import Annotated
-
-from fastapi import FastAPI, Header
+from fastapi import Cookie, FastAPI
+from pydantic import BaseModel
 
 app = FastAPI()
 
 
+class Cookies(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    session_id: str
+    fatebook_tracker: str | None = None
+    googall_tracker: str | None = None
+
+
 @app.get("/items/")
-async def read_items(
-    user_agent: Annotated[str | None, Header()] = None,
-    strange_header: Annotated[str | None, Header(convert_underscores=False)] = None,
-    x_token: Annotated[list[str] | None, Header()] = None,
-):
-    return {
-        "User-Agent": user_agent,
-        "strange_header": strange_header,
-        "x_token": x_token,
-    }
+async def read_items(cookies: Annotated[Cookies, Cookie()]):
+    return cookies
