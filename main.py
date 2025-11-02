@@ -1,113 +1,68 @@
-from typing import Any
-from fastapi import FastAPI, Response
-from fastapi.responses import JSONResponse, RedirectResponse
+from typing import Union
+from fastapi import FastAPI
 from pydantic import BaseModel, EmailStr
 
 app = FastAPI()
 
 
-class Item(BaseModel):
-    name: str
-    description: str | None = None
-    price: float
-    tax: float | None = None
-    tags: list[str] = []
-
-
-@app.post("/items/", response_model=Item)
-async def create_item(item: Item) -> Any:
-    return item
-
-
-@app.get("/items/", response_model=list[Item])
-async def read_items() -> Any:
-    return [
-        {"name": "portal gun", "price": 100.0},
-        {"name": "jetpack", "price": 150.0},
-    ]
-
-
-class UserIn(BaseModel):
-    username: str
-    password: str
-    email: EmailStr
-    full_name: str | None = None
-
-
-class UserOut(BaseModel):
-    username: str
-    email: EmailStr
-    full_name: str | None = None
-    is_active: bool = True
-
-
-@app.post("/users/", response_model=UserOut)
-async def create_user(user: UserIn) -> Any:
-    return user
-
-
-class BaseUser(BaseModel):
+class UserBase(BaseModel):
     username: str
     email: EmailStr
     full_name: str | None = None
 
 
-class UserIn2(BaseUser):
+class UserIn(UserBase):
     password: str
 
 
-@app.post("/users2/", response_model=BaseUser)
-async def create_user2(user: UserIn2) -> BaseUser:
-    return user
+class UserOut(UserBase):
+    pass
 
 
-@app.get("/portal")
-async def get_portal(teleport: bool = False) -> Response:
-    if teleport:
-        return RedirectResponse(url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-    return JSONResponse(content={"message": "Here's your interdimensional portal."})
+class UserInDB(UserBase):
+    hashed_password: str
 
 
-@app.get("/portal2", response_model=None)
-async def get_portal2(teleport: bool = False) -> Response | dict:
-    if teleport:
-        return RedirectResponse(url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-    return {"message": "Here's your interdimensional portal."}
+def fake_password_hasher(raw_password: str):
+    return "supersecret" + raw_password
 
 
-class Item2(BaseModel):
-    name: str
-    description: str | None = None
-    price: float
-    tax: float = 10.5
-    tags: list[str] = []
+def fake_save_user(user_in: UserIn):
+    hashed_password = fake_password_hasher(user_in.password)
+    user_in_db = UserInDB(**user_in.model_dump(), hashed_password=hashed_password)
+    print("User saved! ..not really")
+    return user_in_db
+
+
+@app.post("/user/", response_model=UserOut)
+async def create_user(user_in: UserIn) -> UserOut:
+    user_saved = fake_save_user(user_in)
+    return user_saved
+
+
+class BaseItem(BaseModel):
+    description: str
+    type: str
+
+
+class CarItem(BaseItem):
+    type: str = "car"
+
+
+class PlaneItem(BaseItem):
+    type: str = "plane"
 
 
 items = {
-    "foo": {"name": "Foo", "price": 50.2},
-    "bar": {"name": "Bar", "description": "The bartenders", "price": 62, "tax": 20.2},
-    "baz": {"name": "Baz", "description": None, "price": 50.2, "tax": 10.5, "tags": []},
+    "item1": {"description": "All my friends drive a low rider", "type": "car"},
+    "item2": {
+        "description": "Music is my aeroplane, it's my aeroplane",
+        "type": "plane",
+        "size": 5,
+    },
 }
 
 
-@app.get("/items/{item_id}", response_model_exclude_unset=True)
-async def read_item2(item_id: str) -> Item2:
-    return items[item_id]
-
-
-@app.get(
-    "/items/{item_id}/name",
-    response_model=Item,
-    response_model_include={"name", "description"},
-)
-async def read_item_name(item_id: str) -> Item:
-    return items[item_id]
-
-
-@app.get(
-    "/items/{item_id}/public",
-    response_model=Item,
-    response_model_exclude={"tax"},
-)
-async def read_item_public(item_id: str) -> Item:
+@app.get("/items/{item_id}", response_model=Union[PlaneItem, CarItem])
+async def read_item(item_id: str):
     return items[item_id]
