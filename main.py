@@ -1,70 +1,55 @@
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from enum import Enum
+
+from fastapi import FastAPI, status
 from pydantic import BaseModel
-from starlette.exceptions import HTTPException as StarletteHTTPException
-from fastapi.encoders import jsonable_encoder
-from fastapi.exception_handlers import (
-    http_exception_handler,
-    request_validation_exception_handler,
-)
-
-
-class UnicornException(Exception):
-    def __init__(self, name: str):
-        self.name = name
-
 
 app = FastAPI()
 
 
-@app.exception_handler(UnicornException)
-async def unicorn_exception_handler(request: Request, exc: UnicornException):
-    return JSONResponse(
-        status_code=418,
-        content={"message": f"Oops! {exc.name} did something. There goes a rainbow..."},
-    )
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    return JSONResponse(
-        status_code=422,
-        content=jsonable_encoder({"detail": exc.errors(), "body": exc.body}),
-    )
-
-
-@app.exception_handler(StarletteHTTPException)
-async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
-    print(f"OMG! An HTTP error {exc.status_code} occurred: {exc.detail}")
-    return await http_exception_handler(request, exc)
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler2(request: Request, exc: RequestValidationError):
-    print(f"OMG! The client sent invalid data: {exc}")
-    return await request_validation_exception_handler(request, exc)
-
-
-@app.get("/unicorns/{name}")
-async def read_unicorn(name: str):
-    if name == "yolo":
-        raise UnicornException(name=name)
-    return {"unicorn_name": name}
-
-
-@app.get("/items/{item_id}")
-async def read_item(item_id: int):
-    if item_id == 3:
-        raise HTTPException(status_code=418, detail="Nope! I don't like 3.")
-    return {"item_id": item_id}
-
-
 class Item(BaseModel):
-    title: str
-    size: int
+    name: str
+    description: str | None = None
+    price: float
+    tax: float | None = None
+    tags: set[str] = set()
 
 
-@app.post("/items/")
+class Tags(Enum):
+    items = "items"
+    users = "users"
+
+
+@app.post(
+    "/items/",
+    response_model=Item,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create an item",
+    response_description="The created item",
+    deprecated=True,
+)
 async def create_item(item: Item):
+    """
+    Create an item with all the information
+
+    - **name**: The name of the item
+    - **description**: The description of the item
+    - **price**: The price of the item
+    - **tax**: The tax of the item
+    - **tags**: The tags of the item
+    """
     return item
+
+
+@app.get("/items2/", tags=[Tags.items])
+async def create_item2(item: Item) -> Item:
+    return item
+
+
+@app.get("/items3/", tags=[Tags.items])
+async def read_items():
+    return [{"name": "Foo", "price": 42}]
+
+
+@app.get("/users/", tags=[Tags.users])
+async def read_users():
+    return [{"username": "johndoe"}]
