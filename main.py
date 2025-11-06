@@ -1,94 +1,140 @@
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException
+import jwt
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jwt.exceptions import InvalidTokenError
+from pwdlib import PasswordHash
+from pydantic import BaseModel
 
-app = FastAPI()
+SECRETE_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-data = {
-    "plumbus": {"description": "Freshly picked plumbus", "owner": "Morty"},
-    "portal-gun": {"description": "A gun that shoots portals", "owner": "Rick"},
+fake_users_db = {
+    "johndoe": {
+        "username": "johndoe",
+        "full_name": "John Doe",
+        "email": "johndoe@example.com",
+        "hashed_password": "$argon2id$v=19$m=65536,t=3,p=4$wagCPXjifgvUFBzq4hqe3w$CYaIb8sB+wtD+Vu/P4uod1+Qof8h+1g7bbDlBID48Rc",
+        "disabled": False,
+    }
 }
 
 
-class OwnerError(Exception):
-    pass
+class Token(BaseModel):
+    access_token: str
+    token_type: str
 
 
-def get_username():
+class TokenData(BaseModel):
+    username: str | None = None
+
+
+class User(BaseModel):
+    username: str
+    email: str
+    full_name: str | None = None
+    disabled: bool = False
+
+
+class UserInDb(User):
+    hashed_password: str
+
+
+password_hash = PasswordHash.recommended()
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+app = FastAPI()
+
+
+def verify_password(plain_password: str, hashed_password: str):
+    return password_hash.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password: str):
+    return password_hash.hash(password)
+
+
+def get_user(db, username: str):
+    if username in db:
+        user_dict = db[username]
+        return UserInDb(**user_dict)
+
+
+def authenticate_user(db, username: str, password: str):
+    user = get_user(db, username)
+    if not user:
+        return False
+    if not verify_password(password, user.hashed_password):
+        return False
+    return user
+
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRETE_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+
+async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
     try:
-        print("generate username")
-        yield "Rick"
-        print("username generated")
-    except OwnerError as e:
-        print("owner error")
-        raise HTTPException(status_code=400, detail=f"Owner error: {e}")
+        payload = jwt.decode(token, SECRETE_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        token_data = TokenData(username=username)
+    except InvalidTokenError:
+        raise credentials_exception
+    user = get_user(fake_users_db, username=token_data.username)
+    if user is None:
+        raise credentials_exception
+    return user
 
 
-@app.get("/items/{item_id}")
-def get_item(item_id: str, username: Annotated[str, Depends(get_username)]):
-    if item_id not in data:
-        raise HTTPException(status_code=404, detail="Item not found")
-    item = data[item_id]
-    if item["owner"] != username:
-        raise OwnerError(f"User {username} is not the owner of item {item_id}")
-    return item
+async def get_current_active_user(
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    if current_user.disabled:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    return current_user
 
 
-def get_username2():
-    try:
-        yield "Rick"
-    except OwnerError:
-        print("Oops, we didn't raise again, Britney")
-        raise
+@app.post("/token")
+async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
+    user = authenticate_user(fake_users_db, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    return Token(access_token=access_token, token_type="bearer")
 
 
-@app.get("/items2/{item_id}")
-def get_item2(item_id: str, username: Annotated[str, Depends(get_username2)]):
-    if item_id == "portal-gun":
-        raise OwnerError("Portal gun is not allowed")
-    if item_id != "plumbus":
-        raise HTTPException(status_code=404, detail="Item not found")
-    return item_id
+@app.get("/users/me/")
+async def read_users_me(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> User:
+    return current_user
 
 
-def get_username3():
-    try:
-        yield "Rick"
-    finally:
-        print("Clean up before response is sent")
-
-
-@app.get("/users/me")
-def get_user_me(username: Annotated[str, Depends(get_username3, scope="function")]):
-    return {"username": username}
-
-
-def a_dep():
-    try:
-        print("a_dep")
-        yield "dep_a"
-    finally:
-        print("a_dep end")
-
-
-def b_dep(dep_a: Annotated[str, Depends(a_dep)]):
-    print(f"b_dep received dep_a: {dep_a}")
-    try:
-        print("b_dep")
-        yield "dep_b"
-    finally:
-        print("b_dep end")
-
-
-def c_dep(dep_b: Annotated[str, Depends(b_dep)]):
-    print(f"c_dep received dep_b: {dep_b}")
-    try:
-        print("c_dep")
-        yield "dep_c"
-    finally:
-        print("c_dep end")
-
-
-@app.get("/order/")
-def get_order(dep_c: Annotated[str, Depends(c_dep)]):
-    return "ok"
+@app.get("/users/me/items/")
+async def read_own_items(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> list[dict]:
+    return [{"item_id": "Foo", "owner": current_user.username}]
