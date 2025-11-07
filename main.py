@@ -1,25 +1,35 @@
-from typing import Annotated
+from datetime import datetime
 
-from fastapi import Body, FastAPI, status
+from fastapi import FastAPI, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 app = FastAPI()
 
-items = {"foo": {"name": "Fighters", "size": 6}, "bar": {"name": "Benders", "size": 3}}
+
+class Item(BaseModel):
+    title: str
+    timestamp: datetime
+    description: str | None = None
 
 
-@app.put("/items/{item_id}")
-async def upsert_item(
-    item_id: str,
-    name: Annotated[str | None, Body()] = None,
-    size: Annotated[int | None, Body()] = None,
-):
-    if item_id in items:
-        item = items[item_id]
-        item["name"] = name
-        item["size"] = size
-        return item
-    else:
-        item = {"name": name, "size": size}
-        items[item_id] = item
-        return JSONResponse(status_code=status.HTTP_201_CREATED, content=item)
+@app.put("/items/{id}")
+def update_item(id: str, item: Item):
+    json_compatible_item_data = jsonable_encoder(item)
+    return JSONResponse(content=json_compatible_item_data)
+
+
+@app.get("/legacy/")
+def get_legacy_data():
+    data = """<?xml version="1.0"?>
+    <shampoo>
+    <Header>
+        Apply shampoo here.
+    </Header>
+    <Body>
+        You'll have to use soap here.
+    </Body>
+    </shampoo>
+    """
+    return Response(content=data, media_type="application/xml")
