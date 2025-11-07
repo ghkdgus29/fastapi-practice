@@ -4,15 +4,14 @@ from fastapi.responses import JSONResponse
 app = FastAPI()
 
 
-@app.get("/cookie-and-object/")
-def create_cookie(response: Response):
-    response.set_cookie(key="fakesession", value="fake-cookie-session-value")
-    return {"message": "Come to the darkside, we have cookies"}
+@app.get("/headers-and-object/")
+def get_headers(response: Response):
+    response.headers["X-Cat-Dog"] = "alone in the world"
+    return {"message": "Hello World"}
 
 
-@app.post("/cookie/")
-def create_cookie2():
-    content = {"message": "Come to the darkside, we have cookies"}
-    response = JSONResponse(content=content)
-    response.set_cookie(key="fakesession", value="fake-cookie-session-value")
-    return response
+@app.get("/headers/")
+def get_headers2():
+    content = {"message": "Hello World"}
+    headers = {"X-Cat-Dog": "alone in the world", "Content-Language": "en-US"}
+    return JSONResponse(content=content, headers=headers)
