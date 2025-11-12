@@ -1,36 +1,30 @@
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
+import httpx
 import jwt
-from fastapi import Depends, FastAPI, HTTPException, Security, status
-from fastapi.security.oauth2 import (
-    OAuth2PasswordBearer,
-    OAuth2PasswordRequestForm,
-    SecurityScopes,
-)
-from pwdlib import PasswordHash
+from fastapi import Depends, FastAPI, Form, HTTPException, status
+from fastapi.security import OAuth2AuthorizationCodeBearer
 from pydantic import BaseModel, ValidationError
 
+# JWT 설정
 SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-fake_users_db = {
-    "johndoe": {
-        "username": "johndoe",
-        "full_name": "John Doe",
-        "email": "johndoe@example.com",
-        "hashed_password": "$argon2id$v=19$m=65536,t=3,p=4$wagCPXjifgvUFBzq4hqe3w$CYaIb8sB+wtD+Vu/P4uod1+Qof8h+1g7bbDlBID48Rc",
-        "disabled": False,
-    },
-    "alice": {
-        "username": "alice",
-        "full_name": "Alice Chains",
-        "email": "alicechains@example.com",
-        "hashed_password": "$argon2id$v=19$m=65536,t=3,p=4$g2/AV1zwopqUntPKJavBFw$BwpRGDCyUHLvHICnwijyX8ROGoiUPwNKZ7915MeYfCE",
-        "disabled": True,
-    },
-}
+# GitHub OAuth2 설정
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "your_github_client_id")
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "your_github_client_secret")
+GITHUB_REDIRECT_URI = os.getenv(
+    "GITHUB_REDIRECT_URI", "http://localhost:8000/auth/callback"
+)
+GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
+GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
+GITHUB_USER_URL = "https://api.github.com/user"
+
+# GitHub 사용자 정보를 저장하는 간단한 DB (실제로는 데이터베이스 사용 권장)
+users_db = {}
 
 
 class Token(BaseModel):
@@ -40,52 +34,36 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     username: str | None = None
-    scopes: list[str] = []
 
 
 class User(BaseModel):
     username: str
     email: str | None = None
-    full_name: str | None = None
-    disabled: bool | None = None
+    name: str | None = None
+    avatar_url: str | None = None
+    github_id: int | None = None
 
 
-class UserInDB(User):
-    hashed_password: str
+class GitHubUser(BaseModel):
+    login: str
+    id: int
+    email: str | None = None
+    name: str | None = None
+    avatar_url: str | None = None
 
 
-password_hash = PasswordHash.recommended()
-
-oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl="token",
-    scopes={"me": "Read information about the current user.", "items": "Read items."},
+oauth2_scheme = OAuth2AuthorizationCodeBearer(
+    authorizationUrl=GITHUB_AUTHORIZE_URL,
+    tokenUrl="/auth/callback",
 )
 
-
-app = FastAPI()
-
-
-def verify_password(plain_password, hashed_password):
-    return password_hash.verify(plain_password, hashed_password)
-
-
-def get_password_hash(password):
-    return password_hash.hash(password)
+app = FastAPI(swagger_ui_oauth2_redirect_url="/auth/callback")
 
 
 def get_user(db, username: str):
     if username in db:
         user_dict = db[username]
-        return UserInDB(**user_dict)
-
-
-def authenticate_user(fake_db, username: str, password: str):
-    user = get_user(fake_db, username)
-    if not user:
-        return False
-    if not verify_password(password, user.hashed_password):
-        return False
-    return user
+        return User(**user_dict)
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
@@ -99,79 +77,117 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     return encoded_jwt
 
 
-async def get_current_user(
-    security_scopes: SecurityScopes, token: Annotated[str, Depends(oauth2_scheme)]
-):
-    if security_scopes.scopes:
-        authenticate_value = f'Bearer scope="{security_scopes.scope_str}"'
-    else:
-        authenticate_value = "Bearer"
+async def exchangeGithubCode(code: str) -> str:
+    """GitHub authorization code를 access token으로 교환"""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            GITHUB_TOKEN_URL,
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": GITHUB_CLIENT_ID,
+                "client_secret": GITHUB_CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": GITHUB_REDIRECT_URI,
+            },
+        )
+        data = response.json()
+        if "access_token" not in data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to get access token from GitHub",
+            )
+        return data["access_token"]
+
+
+async def getGithubUser(access_token: str) -> GitHubUser:
+    """GitHub access token으로 사용자 정보 가져오기"""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            GITHUB_USER_URL,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            },
+        )
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Failed to get user info from GitHub",
+            )
+        user_data = response.json()
+        return GitHubUser(**user_data)
+
+
+async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
     credentials_exception = HTTPException(
-        status_code=401,
+        status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
-        headers={"WWW-Authenticate": authenticate_value},
+        headers={"WWW-Authenticate": "Bearer"},
     )
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
+        username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
-        scope: str = payload.get("scopes", "")
-        token_scopes = scope.split()
-        token_data = TokenData(scopes=token_scopes, username=username)
+        token_data = TokenData(username=username)
     except (jwt.InvalidTokenError, ValidationError):
         raise credentials_exception
-    user = get_user(fake_users_db, username=token_data.username)
+
+    user = get_user(users_db, username=token_data.username)
     if user is None:
         raise credentials_exception
-    for scope in security_scopes.scopes:
-        if scope not in token_data.scopes:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Not enough permissions",
-                headers={"WWW-Authenticate": authenticate_value},
-            )
     return user
 
 
-async def get_current_active_user(
-    current_user: Annotated[User, Security(get_current_user, scopes=["me"])],
-):
-    if current_user.disabled:
-        raise HTTPException(status_code=400, detail="Inactive user")
-    return current_user
+@app.post("/auth/callback")
+async def authCallback(code: Annotated[str, Form()]):
+    """GitHub OAuth2 콜백 - authorization code를 받아서 JWT 토큰 생성"""
+    try:
+        # GitHub access token 획득
+        github_access_token = await exchangeGithubCode(code)
 
+        # GitHub 사용자 정보 가져오기
+        github_user = await getGithubUser(github_access_token)
 
-@app.post("/token")
-async def login_for_access_token(
-    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-) -> Token:
-    user = authenticate_user(fake_users_db, form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect username or password",
+        # 사용자 정보를 DB에 저장 (또는 업데이트)
+        user = User(
+            username=github_user.login,
+            email=github_user.email,
+            name=github_user.name,
+            avatar_url=github_user.avatar_url,
+            github_id=github_user.id,
+        )
+        users_db[github_user.login] = user.model_dump()
+
+        # JWT 토큰 생성
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": github_user.login},
+            expires_delta=access_token_expires,
         )
 
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username, "scopes": " ".join(form_data.scopes)},
-        expires_delta=access_token_expires,
-    )
-    return Token(access_token=access_token, token_type="bearer")
+        return Token(access_token=access_token, token_type="bearer")
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Authentication failed: {str(e)}",
+        )
 
 
 @app.get("/users/me/", response_model=User)
 async def read_users_me(
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     return current_user
 
 
 @app.get("/users/me/items/")
 async def read_own_items(
-    current_user: Annotated[User, Security(get_current_active_user, scopes=["items"])],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     return [{"item_id": "Foo", "owner": current_user.username}]
 
