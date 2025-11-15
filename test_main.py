@@ -1,37 +1,66 @@
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
+from typing import Annotated
+
+app = FastAPI()
 
 
-items = {}
+async def common_parameters(q: str | None = None, skip: int = 0, limit: int = 100):
+    return {"q": q, "skip": skip, "limit": limit}
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    items["foo"] = {"name": "Fighters"}
-    items["bar"] = {"name": "Tenders"}
-    yield
-    items.clear()
+@app.get("/items/")
+async def read_items(commons: Annotated[dict, Depends(common_parameters)]):
+    return {"message": "Hello Items!", "params": commons}
 
 
-app = FastAPI(lifespan=lifespan)
+@app.get("/users/")
+async def read_users(commons: Annotated[dict, Depends(common_parameters)]):
+    return {"message": "Hello Users!", "params": commons}
 
 
-@app.get("/items/{item_id}")
-async def read_items(item_id: str):
-    return items[item_id]
+async def override_dependency(q: str | None = None):
+    return {"q": q, "skip": 5, "limit": 10}
 
 
-def test_read_items():
-    assert items == {}
+client = TestClient(app)
 
-    with TestClient(app) as client:
-        assert items == {"foo": {"name": "Fighters"}, "bar": {"name": "Tenders"}}
+app.dependency_overrides[common_parameters] = override_dependency
 
-        response = client.get("/items/foo")
-        assert response.status_code == 200
-        assert response.json() == {"name": "Fighters"}
 
-        assert items == {"foo": {"name": "Fighters"}, "bar": {"name": "Tenders"}}
+def test_override_in_items():
+    response = client.get("/items/")
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "Hello Items!",
+        "params": {"q": None, "skip": 5, "limit": 10},
+    }
 
-    assert items == {}
+
+def test_override_in_items_with_q():
+    response = client.get("/items/", params={"q": "test"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "Hello Items!",
+        "params": {"q": "test", "skip": 5, "limit": 10},
+    }
+
+
+def test_override_in_items_with_params():
+    response = client.get("/items/", params={"q": "test", "skip": 10, "limit": 20})
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "Hello Items!",
+        "params": {"q": "test", "skip": 5, "limit": 10},
+    }
+
+
+def test_no_override_in_items_with_params():
+    app.dependency_overrides.clear()
+    response = client.get("/items/", params={"q": "test", "skip": 10, "limit": 20})
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "Hello Items!",
+        "params": {"q": "test", "skip": 10, "limit": 20},
+    }
