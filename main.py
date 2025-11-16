@@ -1,51 +1,24 @@
-from fastapi import APIRouter, FastAPI
-from pydantic import BaseModel, HttpUrl
+from fastapi import FastAPI
+from datetime import datetime
+from pydantic import BaseModel
 
 app = FastAPI()
 
 
-class Invoice(BaseModel):
-    id: str
-    title: str | None = None
-    customer: str
-    total: float
+class Subscription(BaseModel):
+    username: str
+    monthly_fee: float
+    start_date: datetime
 
 
-class InvoiceEvent(BaseModel):
-    description: str
-    paid: bool
-
-
-class InvoiceEventReceived(BaseModel):
-    ok: bool
-
-
-invoices_callback_router = APIRouter()
-
-
-@invoices_callback_router.post(
-    "{$callback_url}/invoices/{$request.body.id}", response_model=InvoiceEventReceived
-)
-def invoice_notification(body: InvoiceEvent):
-    pass
-
-
-@app.post("/invoices/", callbacks=invoices_callback_router.routes)
-def create_invoice(invoice: Invoice, callback_url: HttpUrl | None = None):
+@app.webhooks.post("new-subscription")
+def new_subscription(body: Subscription):
     """
-    Create an invoice.
-
-    This will (let's imagine) let the API user (some external developer) create an
-    invoice.
-
-    And this path operation will:
-
-    * Send the invoice to the client.
-    * Collect the money from the client.
-    * Send a notification back to the API user (the external developer), as a callback.
-        * At this point is that the API will somehow send a POST request to the
-            external API with the notification of the invoice event
-            (e.g. "payment successful").
+    When a new user subscribes to your service we'll send you a POST request with this
+    data to the URL that you register for the event `new-subscription` in the dashboard.
     """
-    # Send the invoice, collect the money, send the notification (the callback)
-    return {"msg": "Invoice received"}
+
+
+@app.get("/users/")
+def read_users():
+    return ["Rick", "Morty"]
